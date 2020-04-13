@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<PreferenceScreen xmlns:a="http://schemas.android.com/apk/res/android">
+    <PreferenceCategory a:title="Files">
+        <Preference
+            a:title="Agenda files"
+            a:summary="The path to an agenda file or a directory of files"
+            a:key="agenda_files"
+            />
+        <Preference a:title="Contacts file"
+            a:summary="The path to a JSON contacts file"
+            a:key="contacts_file"
+            />
+        <CheckBoxPreference a:defaultValue="true"
+            a:key="ignore_syncthing_conflicts"
+            a:title="Ignore syncthing conflicts"
+            a:summary="SyncThing produces bogus .org files on conflict, which shouldn't become calendars"/>
+    </PreferenceCategory>
+    <PreferenceCategory a:title="Sync">
+        <CheckBoxPreference
+            a:defaultValue="true"
+            a:key="inotify"
+            a:title="Watch for file changes"
+            a:summary="If the agenda files change, trigger calendar sync"
+            />
+        <ListPreference
+            a:defaultValue="0"
+            a:dialogTitle="How often to sync"
+            a:entries="@array/pref_sync_frequency_titles"
+            a:entryValues="@array/pref_sync_frequency_values"
+            a:key="sync_frequency"
+            a:title="Sync frequency" />
+        <Preference
+            a:title="Sync now"
+            a:key="trigger_sync"
+            />
+    </PreferenceCategory>
+    <PreferenceCategory a:title="Calendar">
+        <ListPreference
+            a:title="What dates to use"
+            a:dialogTitle="What dates to use"
+            a:key="date_type"
+            a:entries="@array/pref_date_type_titles"
+            a:entryValues="@array/pref_date_type_values"
+            />
+    </PreferenceCategory>
+</PreferenceScreen>

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="pref_sync_frequency_titles">
+        <item>Manually</item>
+        <item>Hourly</item>
+        <item>Every 6 hours</item>
+        <item>Every 12 hours</item>
+    </string-array>
+    <string-array name="pref_sync_frequency_values">
+        <item>-1</item>
+        <item>1</item>
+        <item>6</item>
+        <item>12</item>
+    </string-array>
+    <string-array name="pref_date_type_titles">
+        <item>Active timestamps</item>
+        <item>Scheduled dates</item>
+        <item>Deadline dates</item>
+    </string-array>
+    <string-array name="pref_date_type_values">
+        <item>active</item>
+        <item>scheduled</item>
+        <item>deadline</item>
+    </string-array>
+</resources>
