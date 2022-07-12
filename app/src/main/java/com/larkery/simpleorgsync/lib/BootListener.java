@@ -11,9 +11,8 @@ public class BootListener extends BroadcastReceiver {
     public void onReceive(Context context, Intent intent) {
         SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(context);
         boolean inotify = preferences.getBoolean("inotify", false);
-        Intent i = new Intent(context, FileChangeSyncTrigger.class);
         if (inotify) {
-            context.startService(i);
+            FileJobService.register(context);
         }
     }
 }

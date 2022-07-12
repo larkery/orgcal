@@ -1,0 +1,48 @@
+#+TITLE: org mode android calendar provider
+#+AUTHOR: Tom H
+
+* What is it
+
+This is an android calendar & contacts provider designed to sync android's contentproviders with some flat files.
+
+The calendar provider syncs with org-mode files, and the contacts provider with some arbitrary json format.
+
+* Misfeatures
+
+Org-mode timestamps can't represent the full range of icalendar dates.
+
+I don't care about this in general, icalendar is weirdly overspecified.
+
+However I do like to be able to write events that are like "every N days / weeks etc, until some date" without replicating headings which is the suggested solution.
+
+To do this I abuse the unsupported syntax:
+
+#+begin_src org
+  <2022-07-12 Tue +5d>--<2022-09-06 Tue>
+#+end_src
+
+To mean "every 5 days until the end date".
+
+To make this work you need the following advice:
+
+#+begin_src elisp
+(defun filter-org-agenda-get-blocks (blocks)
+    (with-no-warnings (defvar date))
+    (let* ((current (calendar-absolute-from-gregorian date))
+           (dotime))
+      (cl-loop
+       for block in blocks
+       do (setq dotime (and block (get-text-property 0 'dotime block)))
+       when (and dotime
+                 (string-match-p org-repeat-re dotime)
+                 (string-match org-ts-regexp dotime))
+       when (= current (org-time-string-to-absolute (match-string 1 dotime)
+                                                    current
+                                                    'future))
+       collect block)))
+
+(advice-add 'org-agenda-get-blocks
+            :filter-return
+            #'filter-org-agenda-get-blocks)
+#+end_src
+

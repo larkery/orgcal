@@ -65,6 +65,7 @@ public class ContactsJson {
         public LinkedHashSet<Tuple> address;
         public LinkedHashSet<Tuple> phone;
         public LinkedHashSet<Tuple> email;
+        public LinkedHashSet<String> groups;
         public String firstName;
         public String middleName;
         public String surname;
@@ -81,6 +82,7 @@ public class ContactsJson {
             address = mergeWith(address, other.address);
             phone = mergeWith(phone, other.phone);
             email = mergeWith(email, other.email);
+            groups = mergeWith(groups, other.groups);
 
             firstName = leastNull(firstName, other.firstName);
             surname = leastNull(surname, other.surname);
@@ -91,7 +93,7 @@ public class ContactsJson {
             notes = leastNull(notes, other.notes);
         }
 
-        private LinkedHashSet<Tuple> mergeWith(LinkedHashSet<Tuple> into, LinkedHashSet<Tuple> from) {
+        private <T> LinkedHashSet<T> mergeWith(LinkedHashSet<T> into, LinkedHashSet<T> from) {
             if (from != null) {
                 if (into == null) into = new LinkedHashSet<>();
                 into.addAll(from);
@@ -127,6 +129,16 @@ public class ContactsJson {
             }
         }
 
+        static void upd1(MessageDigest digest, LinkedHashSet<String> vs) {
+            if (vs == null) {
+                digest.update((byte) 0);
+            } else {
+                for (final String t : vs) {
+                    upd(digest, t);
+                }
+            }
+        }
+
         static void upd(MessageDigest digest, LinkedHashSet<Tuple> vs) {
             if (vs == null) {
                 digest.update((byte) 0);
@@ -146,6 +158,7 @@ public class ContactsJson {
                 upd(digest, firstName);
                 upd(digest, surname);
                 upd(digest, middleName);
+                upd1(digest, groups);
                 upd(digest, organisation);
                 upd(digest, birthday);
                 upd(digest, anniversary);
@@ -159,6 +172,10 @@ public class ContactsJson {
             }
         }
 
+        public void addGroup(String group) {
+            if (groups == null) groups = new LinkedHashSet<>();
+            groups.add(group);
+        }
     }
 
     static class TupleAdapter implements JsonSerializer<Tuple>,

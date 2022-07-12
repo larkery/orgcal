@@ -38,6 +38,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -104,7 +105,6 @@ public class ConSyncAdapter extends AbstractThreadedSyncAdapter {
                             ContactsContract.Settings.CONTENT_URI)
                             .withValue(ContactsContract.Settings.ACCOUNT_NAME, account.name)
                             .withValue(ContactsContract.Settings.ACCOUNT_TYPE, account.type)
-
                             .withValue(ContactsContract.Settings.UNGROUPED_VISIBLE, true)
                             .build());
 
@@ -120,6 +120,8 @@ public class ConSyncAdapter extends AbstractThreadedSyncAdapter {
                     }
                     Log.i(TAG, "Read " + dbContents.size() + " entries");
                     final Set<String> processedContacts = new HashSet<>();
+
+                    final Map<Long, String> groupNames = new HashMap<>();
 
                     boolean changedDatabaseContents = false;
                     // iterate on the database contents
@@ -156,7 +158,7 @@ public class ConSyncAdapter extends AbstractThreadedSyncAdapter {
                             } else if (newOnPhone) {
                                 final String u = UUID.randomUUID().toString();
                                 Log.i(TAG, "Created on phone " + id + " " + u);
-                                final ContactsJson.Contact c = loadFromPhone(provider, id);
+                                final ContactsJson.Contact c = loadFromPhone(provider, id, groupNames);
                                 dbContents.put(u, c);
                                 changedDatabaseContents = true;
                                 setUUIDOnPhone(id, u, c.checksum(), ops);
@@ -164,7 +166,7 @@ public class ConSyncAdapter extends AbstractThreadedSyncAdapter {
                             } else if (modifiedElsewhere && modifiedOnPhone) {
                                 Log.i(TAG, "Merge changes in " + id + " " + uuid);
                                 final ContactsJson.Contact c = dbContents.get(uuid);
-                                c.mergeWith(loadFromPhone(provider, id));
+                                c.mergeWith(loadFromPhone(provider, id, groupNames));
                                 deleteDataOnPhone(id, ops);
                                 updateOnPhone(id, c, ops);
                                 setUUIDOnPhone(id, uuid, curChecksum, ops);
@@ -172,7 +174,7 @@ public class ConSyncAdapter extends AbstractThreadedSyncAdapter {
                                 changedDatabaseContents = true;
                             } else if (modifiedOnPhone) {
                                 Log.i(TAG, "Update from phone " + id + " " + uuid);
-                                final ContactsJson.Contact c = loadFromPhone(provider, id);
+                                final ContactsJson.Contact c = loadFromPhone(provider, id, groupNames);
                                 dbContents.put(uuid, c);
                                 changedDatabaseContents = true;
                                 setUUIDOnPhone(id, uuid, c.checksum(), ops);
@@ -231,7 +233,7 @@ public class ConSyncAdapter extends AbstractThreadedSyncAdapter {
         ).build());
     }
 
-    private ContactsJson.Contact loadFromPhone(ContentProviderClient provider, long id) throws RemoteException, RemoteException {
+    private ContactsJson.Contact loadFromPhone(ContentProviderClient provider, long id, final Map<Long, String> groupNames) throws RemoteException, RemoteException {
         final ContactsJson.Contact out = new ContactsJson.Contact();
 
         Uri dataURI = rawContactsURI(id);
@@ -239,6 +241,7 @@ public class ConSyncAdapter extends AbstractThreadedSyncAdapter {
                 dataURI,
                 RawContacts.Entity.CONTENT_DIRECTORY
         );
+
         try (Cursor dataRows = provider.query(
                 dataURI,
                 new String[] {
@@ -371,6 +374,15 @@ public class ConSyncAdapter extends AbstractThreadedSyncAdapter {
 
                         out.addAddress(label, rawText);
 
+                        break;
+                    }
+                    case ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE: {
+                        final long groupID = dataRows.getLong(1);
+                        // find the group name for this
+                        String group = groupNames.get(groupID);
+                        if (group != null) {
+                            out.addGroup(group);
+                        }
                         break;
                     }
                     default:

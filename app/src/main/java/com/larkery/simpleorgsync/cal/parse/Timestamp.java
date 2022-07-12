@@ -1,12 +1,18 @@
 package com.larkery.simpleorgsync.cal.parse;
 
+import android.annotation.SuppressLint;
+import android.os.Build;
+import android.support.annotation.RequiresApi;
+
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
 import java.util.Objects;
 import java.util.TimeZone;
+import java.util.regex.Pattern;
 
+@RequiresApi(api = Build.VERSION_CODES.N)
 public class Timestamp {
     private static final long ONE_SEC = 1000;
     private static final long ONE_MINUTE = 60 * ONE_SEC;
@@ -16,12 +22,19 @@ public class Timestamp {
 
     private boolean modified = false;
 
-    public Timestamp(TimeZone timeZone, long dtStart, long dtEnd, boolean allDay, Type type) {
+    public Timestamp(TimeZone timeZone,
+                     long dtStart,
+                     long dtEnd,
+                     boolean allDay,
+                     Type type,
+                     String rrule) {
         this.zone = timeZone;
         this.startTime = dtStart;
         this.endTime = dtEnd;
         this.allDay = allDay;
         this.type = type;
+        setRRule(rrule);
+        modified = false;
     }
 
     public long getStartTime() {
@@ -80,7 +93,7 @@ public class Timestamp {
     }
 
     public String getRRULE() {
-        return recurrence.getRRULE(frequency);
+        return recurrence.getRRULE(frequency, repeatEndTime);
     }
 
     public String getDuration() {
@@ -115,6 +128,62 @@ public class Timestamp {
             out.append("M");
         }
         return out.toString();
+    }
+
+    @SuppressLint("NewApi")
+    static final SimpleDateFormat icalSDF = new SimpleDateFormat( "yyyyMMdd'T'HHmmssX");
+    static {
+        icalSDF.setTimeZone(TimeZone.getTimeZone("Z"));
+    }
+    public void setRRule(final String rrule) {
+        // rrule is a semicolon separated list of equals separated values
+        String[] parts = rrule.split(";");
+        RecurrenceInterval newrecurrence = RecurrenceInterval.NONE;
+        int newfrequency = 1;
+        Long newrepeatEndTime = null;
+        for (String part : parts) {
+            String[] keyval = part.split("=", 2);
+            if (keyval.length == 2) {
+                final String key = keyval[0];
+                final String val = keyval[1];
+                switch (key) {
+                    case "FREQ":
+                        switch (val) {
+                            case "DAILY":
+                            case "WEEKLY":
+                            case "MONTHLY":
+                            case "YEARLY":
+                                newrecurrence = RecurrenceInterval.valueOf(RecurrenceInterval.class, val);
+                                break;
+                        }
+                        break;
+                    case "INTERVAL":
+                        try {
+                            newfrequency = Integer.parseInt(val);
+                        } catch (NumberFormatException nfe) {
+                        }
+                        break;
+                    case "UNTIL": //19971224T000000Z
+                        try {
+                            Date d = icalSDF.parse(val);
+                            newrepeatEndTime = d.getTime();
+                        } catch (ParseException e) {
+
+                        }
+                        break;
+                    case "COUNT": // TODO convert into an until
+                        break;
+                }
+            }
+        }
+        if (newfrequency != frequency ||
+                newrepeatEndTime != repeatEndTime ||
+                newrecurrence != recurrence) {
+            modified = true;
+            frequency = newfrequency;
+            repeatEndTime = newrepeatEndTime;
+            recurrence = newrecurrence;
+        }
     }
 
     public enum Type {
@@ -158,8 +227,14 @@ public class Timestamp {
             }
         }
 
-        public String getRRULE(int frequency) {
-            return String.format("FREQ=%s;INTERVAL=%d", this, frequency);
+        public String getRRULE(int frequency, Long repeatEndTime) {
+            if (repeatEndTime != null) {
+                Date dt = new Date(repeatEndTime);
+                return String.format("FREQ=%s;INTERVAL=%d;UNTIL=%s", this, frequency,
+                        icalSDF.format(dt));
+            } else {
+                return String.format("FREQ=%s;INTERVAL=%d", this, frequency);
+            }
         }
     }
 
@@ -176,6 +251,8 @@ public class Timestamp {
 
     private long startTime;
     private long endTime;
+
+    private Long repeatEndTime;
 
     private static final SimpleDateFormat LONG_FORMAT =
             new SimpleDateFormat("yyyy-MM-dd HH:mm");
@@ -225,7 +302,7 @@ public class Timestamp {
 
                     if (firstEndTime != null) {
                         endDate = LONG_FORMAT.parse(firstDate + " " + firstEndTime);
-                    } else if (secondDate != null) {
+                    } else if (secondDate != null && repeater == null) {
                         endDate = LONG_FORMAT.parse(secondDate + " " +
                                 (secondTime == null ? "00:00" : secondTime)
                         );
@@ -237,15 +314,21 @@ public class Timestamp {
 
                 this.startTime = startDate.getTime();
                 this.endTime = endDate.getTime();
+                this.repeatEndTime = null;
 
                 // now handle rrule
-
                 if (repeater != null) {
                     this.frequency = Integer.parseInt(
                             repeater.substring(1, repeater.length()-1)
                     );
                     this.recurrence = RecurrenceInterval
                             .fromOrgString(repeater.substring(repeater.length()-1));
+                    if (secondDate != null) {
+                        Date finishDate = LONG_FORMAT.parse(secondDate + " " +
+                                (secondTime == null ? "00:00" : secondTime)
+                        );
+                        this.repeatEndTime = finishDate.getTime();
+                    }
                 }
 
                 type = prefix == null ? Type.ACTIVE :
@@ -262,7 +345,7 @@ public class Timestamp {
 
     @Override
     public int hashCode() {
-        return Objects.hash(startTime, endTime, allDay, recurrence, frequency);
+        return Objects.hash(startTime, endTime, allDay, recurrence, frequency, repeatEndTime);
     }
 
     @Override
@@ -273,22 +356,40 @@ public class Timestamp {
         final String startDate = start.substring(0, 10);
         String out = "";
 
-        if (startTime == endTime) {
+        if (recurrence != RecurrenceInterval.NONE) {
+            final String end = LONG_FORMAT.format(new Date(endTime));
+            final String endDate = end.substring(0, 10);
+            if (allDay && (endTime == startTime + ONE_DAY)) {
+                out = startDate;
+            } else if (startDate.equals(endDate)) {
+                if (allDay) {
+                    out = startDate;
+                } else {
+                    out = start + "-" + end.substring(11);
+                }
+            } else {
+                // can't represent this in org mode - not sure what to do. truncate?
+                out = startDate;
+            }
+            out = "<" + out + recurrence.stringFor(frequency) + ">";
+            if (repeatEndTime != null) {
+                final String rend = LONG_FORMAT.format(new Date(repeatEndTime));
+                final String rendDate = rend.substring(0, 10);
+                out = out +"--<" + rendDate + ">";
+            }
+        } else if (startTime == endTime) {
             if (allDay) {
                 out = startDate;
             } else {
                 out = start;
             }
-
-            out += recurrence.stringFor(frequency);
-            out = "<"+out+">";
+            out = "<" + out + ">";
         } else {
             final String end = LONG_FORMAT.format(new Date(endTime));
             final String endDate = end.substring(0, 10);
 
             if (allDay && (endTime == startTime + ONE_DAY)) {
                 out = startDate;
-                out += recurrence.stringFor(frequency);
                 out = "<" + out + ">";
             } else if (startDate.equals(endDate)) {
                 if (allDay) {
@@ -297,7 +398,6 @@ public class Timestamp {
                     out = start + "-" + end.substring(11);
                 }
 
-                out += recurrence.stringFor(frequency);
                 out = "<" + out + ">";
             } else {
                 // these events cannot repeat, because org mode doesn't do repeating

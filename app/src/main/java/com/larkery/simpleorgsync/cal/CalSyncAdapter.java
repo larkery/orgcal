@@ -14,11 +14,13 @@ import android.database.Cursor;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.RemoteException;
+import android.os.StrictMode;
 import android.preference.PreferenceManager;
 import android.provider.CalendarContract;
 import android.provider.CalendarContract.Calendars;
 import android.text.TextUtils;
 import android.util.Log;
+import android.widget.Toast;
 
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
@@ -82,6 +84,7 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
     @Override
     public void onPerformSync(Account account, Bundle extras, String authority,
                               ContentProviderClient provider, SyncResult syncResult) {
+        int updatedInOrg = 0;
         final SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getContext());
         final String agendaRoot = prefs.getString("agenda_files", null);
 
@@ -207,9 +210,11 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
                         h.edit(edits);
                         nedits = edits.size() - nedits;
                         if (nedits > 0) Log.i(TAG, h.getHeading() + ": " + nedits + " edits");
+                        if (nedits > 0) updatedInOrg++;
                     } else if (!h.exists()) {
                         Log.i(TAG, "Appending " + h);
                         h.append(appends);
+                        updatedInOrg++;
                     }
                 } catch (Exception e) {
                     Log.e(TAG, "Error with heading" + h, e);
@@ -515,6 +520,7 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
         ts.setStartTime(query.getLong(EventsProjection.START_TIME.ordinal()));
         ts.setEndTime(query.getLong(EventsProjection.END_TIME.ordinal()));
         ts.setAllDay(query.getInt(EventsProjection.IS_ALL_DAY.ordinal()) == 1);
+        ts.setRRule(query.getString(EventsProjection.RRULE.ordinal()));
         final String location = query.getString(EventsProjection.LOCATION.ordinal());
         if (location != null && !location.isEmpty()) {
             heading.setProperty("LOCATION", location);
@@ -559,7 +565,8 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
                         dtStart,
                         dtEnd,
                         allDay,
-                        ttype
+                        ttype,
+                        rrule
                 ));
 
 

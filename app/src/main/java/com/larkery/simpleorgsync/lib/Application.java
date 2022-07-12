@@ -6,6 +6,7 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.os.Build;
 import android.os.Bundle;
 import android.preference.PreferenceManager;
 import android.provider.CalendarContract;
@@ -14,6 +15,9 @@ import android.util.Log;
 
 import com.larkery.simpleorgsync.R;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.util.Calendar;
 
 public class Application extends android.app.Application implements SharedPreferences.OnSharedPreferenceChangeListener {
@@ -24,18 +28,12 @@ public class Application extends android.app.Application implements SharedPrefer
     public void onCreate() {
         super.onCreate();
         this.accountManager = (AccountManager) getApplicationContext().getSystemService(Context.ACCOUNT_SERVICE);
-        account =
-                new Account("Org Agenda",
-                        getString(R.string.account_type));
+        account = new Account("Org Agenda", getString(R.string.account_type));
 
         final SharedPreferences preferences = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
         preferences.registerOnSharedPreferenceChangeListener(this);
 
-        boolean inotify = preferences.getBoolean("inotify", false);
-        Intent i = new Intent(getApplicationContext(), FileChangeSyncTrigger.class);
-        if (inotify) {
-            getApplicationContext().startService(i);
-        }
+        FileJobService.register(getApplicationContext());
     }
 
     public Account getAccount() {
@@ -84,6 +82,40 @@ public class Application extends android.app.Application implements SharedPrefer
         }
     }
 
+    public long getLastSyncTime() {
+        long result = 0;
+        try {
+            Method getSyncStatus = ContentResolver.class.getMethod(
+                    "getSyncStatus", Account.class, String.class);
+            Account mAccount = getAccount();
+
+            if (mAccount != null) {
+                Object status = getSyncStatus.invoke(null, mAccount, CalendarContract.AUTHORITY);
+                Class<?> statusClass = Class
+                        .forName("android.content.SyncStatusInfo");
+                boolean isStatusObject = statusClass.isInstance(status);
+                if (isStatusObject) {
+                    Field successTime = statusClass.getField("lastSuccessTime");
+                    result = successTime.getLong(status);
+                }
+            }
+        } catch (NoSuchMethodException e) {
+
+        } catch (IllegalAccessException e) {
+
+        } catch (InvocationTargetException e) {
+
+        } catch (IllegalArgumentException e) {
+
+        } catch (ClassNotFoundException e) {
+
+        } catch (NoSuchFieldException e) {
+
+        } catch (NullPointerException e) {
+
+        }
+        return result;
+    }
 
     private boolean isContactsSyncable() {
         return
@@ -112,13 +144,7 @@ public class Application extends android.app.Application implements SharedPrefer
             }
                 break;
             case "inotify":
-                boolean inotify = sharedPreferences.getBoolean("inotify", false);
-                Intent i = new Intent(getApplicationContext(), FileChangeSyncTrigger.class);
-                if (inotify) {
-                    getApplicationContext().startService(i);
-                } else {
-                    getApplicationContext().stopService(i);
-                }
+                FileJobService.register(getApplicationContext());
                 break;
             case "sync_frequency":
             {
