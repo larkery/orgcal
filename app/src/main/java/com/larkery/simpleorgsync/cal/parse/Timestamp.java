@@ -138,43 +138,46 @@ public class Timestamp {
         icalSDF.setTimeZone(TimeZone.getTimeZone("Z"));
     }
     public void setRRule(final String rrule) {
-        // rrule is a semicolon separated list of equals separated values
-        String[] parts = rrule.split(";");
         RecurrenceInterval newrecurrence = RecurrenceInterval.NONE;
         int newfrequency = 1;
         Long newrepeatEndTime = null;
-        for (String part : parts) {
-            String[] keyval = part.split("=", 2);
-            if (keyval.length == 2) {
-                final String key = keyval[0];
-                final String val = keyval[1];
-                switch (key) {
-                    case "FREQ":
-                        switch (val) {
-                            case "DAILY":
-                            case "WEEKLY":
-                            case "MONTHLY":
-                            case "YEARLY":
-                                newrecurrence = RecurrenceInterval.valueOf(RecurrenceInterval.class, val);
-                                break;
-                        }
-                        break;
-                    case "INTERVAL":
-                        try {
-                            newfrequency = Integer.parseInt(val);
-                        } catch (NumberFormatException nfe) {
-                        }
-                        break;
-                    case "UNTIL": //19971224T000000Z
-                        try {
-                            Date d = icalSDF.parse(val);
-                            newrepeatEndTime = d.getTime();
-                        } catch (ParseException e) {
+        // rrule is a semicolon separated list of equals separated values
+        if (rrule != null ) {
+            String[] parts = rrule.split(";");
 
-                        }
-                        break;
-                    case "COUNT": // TODO convert into an until
-                        break;
+            for (String part : parts) {
+                String[] keyval = part.split("=", 2);
+                if (keyval.length == 2) {
+                    final String key = keyval[0];
+                    final String val = keyval[1];
+                    switch (key) {
+                        case "FREQ":
+                            switch (val) {
+                                case "DAILY":
+                                case "WEEKLY":
+                                case "MONTHLY":
+                                case "YEARLY":
+                                    newrecurrence = RecurrenceInterval.valueOf(RecurrenceInterval.class, val);
+                                    break;
+                            }
+                            break;
+                        case "INTERVAL":
+                            try {
+                                newfrequency = Integer.parseInt(val);
+                            } catch (NumberFormatException nfe) {
+                            }
+                            break;
+                        case "UNTIL": //19971224T000000Z
+                            try {
+                                Date d = icalSDF.parse(val);
+                                newrepeatEndTime = d.getTime();
+                            } catch (ParseException e) {
+
+                            }
+                            break;
+                        case "COUNT": // TODO convert into an until
+                            break;
+                    }
                 }
             }
         }
