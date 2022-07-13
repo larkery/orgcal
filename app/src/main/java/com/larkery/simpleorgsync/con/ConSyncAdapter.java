@@ -6,6 +6,7 @@ import android.content.ContentProviderClient;
 import android.content.ContentProviderOperation;
 import android.content.ContentUris;
 import android.content.Context;
+import android.content.OperationApplicationException;
 import android.content.SharedPreferences;
 import android.content.SyncResult;
 import android.database.Cursor;
@@ -31,7 +32,9 @@ import com.larkery.simpleorgsync.lib.Application;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
@@ -93,118 +96,123 @@ public class ConSyncAdapter extends AbstractThreadedSyncAdapter {
         this.rawContactsURI = syncAdapterURI(RawContacts.CONTENT_URI, account);
         this.dataURI = syncAdapterURI(ContactsContract.Data.CONTENT_URI, account);
         this.account = account;
+        Map<String, ContactsJson.Contact> dbContents = Collections.emptyMap();
 
+        try (final BufferedReader reader = new BufferedReader(
+                new InputStreamReader(
+                        getContext().getContentResolver().openInputStream(Uri.parse(contactsFile))
+                )
+        )) {
+            dbContents = ContactsJson.load(reader);
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        final ArrayList<ContentProviderOperation> ops = new ArrayList<>();
+        ops.add(ContentProviderOperation.newInsert(
+                ContactsContract.Settings.CONTENT_URI)
+                .withValue(ContactsContract.Settings.ACCOUNT_NAME, account.name)
+                .withValue(ContactsContract.Settings.ACCOUNT_TYPE, account.type)
+                .withValue(ContactsContract.Settings.UNGROUPED_VISIBLE, true)
+                .build());
+
+
+            Log.i(TAG, "Read " + dbContents.size() + " entries");
+            final Set<String> processedContacts = new HashSet<>();
+
+            final Map<Long, String> groupNames = new HashMap<>();
+
+            boolean changedDatabaseContents = false;
+            // iterate on the database contents
+            try (Cursor rawContacts = provider.query(
+                    rawContactsURI.buildUpon()
+                            .appendQueryParameter(ContactsContract.RawContacts.ACCOUNT_TYPE, account.type)
+                            .appendQueryParameter(ContactsContract.RawContacts.ACCOUNT_NAME, account.name)
+                    .build(),
+                    ContactsProjection.PROJECTION,
+                    null, null, null)) {
+
+                // process contacts on device
+                while (rawContacts.moveToNext()) {
+                    final String uuid = rawContacts.getString(ContactsProjection.UUID.ordinal());
+                    final long id = rawContacts.getLong(ContactsProjection.ID.ordinal());
+
+                    if (uuid != null) processedContacts.add(uuid);
+
+                    final boolean newOnPhone = uuid == null || uuid.isEmpty();
+                    final boolean deletedElsewhere = !newOnPhone && !dbContents.containsKey(uuid);
+
+                    final boolean deletedOnPhone = rawContacts.getInt(ContactsProjection.DELETED.ordinal()) == 1;
+                    final boolean modifiedOnPhone = rawContacts.getInt(ContactsProjection.DIRTY.ordinal()) == 1;
+
+                    final String lastChecksum = rawContacts.getString(ContactsProjection.CHKSUM.ordinal());
+                    final String curChecksum = dbContents.containsKey(uuid) ? dbContents.get(uuid).checksum() : null;
+                    final boolean modifiedElsewhere = !Objects.equal(lastChecksum, curChecksum);
+
+                    if (deletedOnPhone || deletedElsewhere) {
+                        Log.i(TAG, "Delete globally " + id + " " + uuid);
+                        dbContents.remove(uuid);
+                        changedDatabaseContents = true;
+                        deleteOnPhone(id, ops);
+                    } else if (newOnPhone) {
+                        final String u = UUID.randomUUID().toString();
+                        Log.i(TAG, "Created on phone " + id + " " + u);
+                        final ContactsJson.Contact c = loadFromPhone(provider, id, groupNames);
+                        dbContents.put(u, c);
+                        changedDatabaseContents = true;
+                        setUUIDOnPhone(id, u, c.checksum(), ops);
+                        processedContacts.add(u);
+                    } else if (modifiedElsewhere && modifiedOnPhone) {
+                        Log.i(TAG, "Merge changes in " + id + " " + uuid);
+                        final ContactsJson.Contact c = dbContents.get(uuid);
+                        c.mergeWith(loadFromPhone(provider, id, groupNames));
+                        deleteDataOnPhone(id, ops);
+                        updateOnPhone(id, c, ops);
+                        setUUIDOnPhone(id, uuid, curChecksum, ops);
+                        dbContents.put(uuid, c);
+                        changedDatabaseContents = true;
+                    } else if (modifiedOnPhone) {
+                        Log.i(TAG, "Update from phone " + id + " " + uuid);
+                        final ContactsJson.Contact c = loadFromPhone(provider, id, groupNames);
+                        dbContents.put(uuid, c);
+                        changedDatabaseContents = true;
+                        setUUIDOnPhone(id, uuid, c.checksum(), ops);
+                    } else if (modifiedElsewhere) {
+                        Log.i(TAG, "Update to phone " + id + " " + uuid);
+                        deleteDataOnPhone(id, ops);
+                        updateOnPhone(id, dbContents.get(uuid), ops);
+                    }
+                }
+            } catch (RemoteException e) {
+                e.printStackTrace();
+            }
+
+        for (final String missing : Sets.difference(dbContents.keySet(), processedContacts)) {
+                Log.i(TAG, "Insert " + missing);
+                insertOnPhone(missing, dbContents.get(missing), ops);
+            }
 
         try {
-            if (contactsFile != null) {
-                final File file = new File(contactsFile);
-                if (file.exists() && file.isFile()) {
-                    Log.i(TAG, "File opened OK");
-                    final ArrayList<ContentProviderOperation> ops = new ArrayList<>();
-                    ops.add(ContentProviderOperation.newInsert(
-                            ContactsContract.Settings.CONTENT_URI)
-                            .withValue(ContactsContract.Settings.ACCOUNT_NAME, account.name)
-                            .withValue(ContactsContract.Settings.ACCOUNT_TYPE, account.type)
-                            .withValue(ContactsContract.Settings.UNGROUPED_VISIBLE, true)
-                            .build());
-
-                    final BufferedReader reader = new BufferedReader(
-                            new InputStreamReader(new FileInputStream(file),
-                                    StandardCharsets.UTF_8)
-                    );
-                    final Map<String, ContactsJson.Contact> dbContents;
-                    try {
-                        dbContents = ContactsJson.load(reader);
-                    } finally {
-                        reader.close();
-                    }
-                    Log.i(TAG, "Read " + dbContents.size() + " entries");
-                    final Set<String> processedContacts = new HashSet<>();
-
-                    final Map<Long, String> groupNames = new HashMap<>();
-
-                    boolean changedDatabaseContents = false;
-                    // iterate on the database contents
-                    try (Cursor rawContacts = provider.query(
-                            rawContactsURI.buildUpon()
-                                    .appendQueryParameter(ContactsContract.RawContacts.ACCOUNT_TYPE, account.type)
-                                    .appendQueryParameter(ContactsContract.RawContacts.ACCOUNT_NAME, account.name)
-                            .build(),
-                            ContactsProjection.PROJECTION,
-                            null, null, null)) {
-
-                        // process contacts on device
-                        while (rawContacts.moveToNext()) {
-                            final String uuid = rawContacts.getString(ContactsProjection.UUID.ordinal());
-                            final long id = rawContacts.getLong(ContactsProjection.ID.ordinal());
-
-                            if (uuid != null) processedContacts.add(uuid);
-
-                            final boolean newOnPhone = uuid == null || uuid.isEmpty();
-                            final boolean deletedElsewhere = !newOnPhone && !dbContents.containsKey(uuid);
-
-                            final boolean deletedOnPhone = rawContacts.getInt(ContactsProjection.DELETED.ordinal()) == 1;
-                            final boolean modifiedOnPhone = rawContacts.getInt(ContactsProjection.DIRTY.ordinal()) == 1;
-
-                            final String lastChecksum = rawContacts.getString(ContactsProjection.CHKSUM.ordinal());
-                            final String curChecksum = dbContents.containsKey(uuid) ? dbContents.get(uuid).checksum() : null;
-                            final boolean modifiedElsewhere = !Objects.equal(lastChecksum, curChecksum);
-
-                            if (deletedOnPhone || deletedElsewhere) {
-                                Log.i(TAG, "Delete globally " + id + " " + uuid);
-                                dbContents.remove(uuid);
-                                changedDatabaseContents = true;
-                                deleteOnPhone(id, ops);
-                            } else if (newOnPhone) {
-                                final String u = UUID.randomUUID().toString();
-                                Log.i(TAG, "Created on phone " + id + " " + u);
-                                final ContactsJson.Contact c = loadFromPhone(provider, id, groupNames);
-                                dbContents.put(u, c);
-                                changedDatabaseContents = true;
-                                setUUIDOnPhone(id, u, c.checksum(), ops);
-                                processedContacts.add(u);
-                            } else if (modifiedElsewhere && modifiedOnPhone) {
-                                Log.i(TAG, "Merge changes in " + id + " " + uuid);
-                                final ContactsJson.Contact c = dbContents.get(uuid);
-                                c.mergeWith(loadFromPhone(provider, id, groupNames));
-                                deleteDataOnPhone(id, ops);
-                                updateOnPhone(id, c, ops);
-                                setUUIDOnPhone(id, uuid, curChecksum, ops);
-                                dbContents.put(uuid, c);
-                                changedDatabaseContents = true;
-                            } else if (modifiedOnPhone) {
-                                Log.i(TAG, "Update from phone " + id + " " + uuid);
-                                final ContactsJson.Contact c = loadFromPhone(provider, id, groupNames);
-                                dbContents.put(uuid, c);
-                                changedDatabaseContents = true;
-                                setUUIDOnPhone(id, uuid, c.checksum(), ops);
-                            } else if (modifiedElsewhere) {
-                                Log.i(TAG, "Update to phone " + id + " " + uuid);
-                                deleteDataOnPhone(id, ops);
-                                updateOnPhone(id, dbContents.get(uuid), ops);
-                            }
-                        }
-                    }
-
-                    for (final String missing : Sets.difference(dbContents.keySet(), processedContacts)) {
-                        Log.i(TAG, "Insert " + missing);
-                        insertOnPhone(missing, dbContents.get(missing), ops);
-                    }
-
-                    provider.applyBatch(ops);
-                    if (changedDatabaseContents) {
-                        try (final OutputStreamWriter w = new OutputStreamWriter(
-                                new FileOutputStream(file),
-                                StandardCharsets.UTF_8)) {
-                            ContactsJson.save(w, dbContents);
-                        }
-                    }
-                } else {
-                    Log.w(TAG, "BBDB file " + file + " is not a plain file!");
+            provider.applyBatch(ops);
+        } catch (OperationApplicationException e) {
+            e.printStackTrace();
+        } catch (RemoteException e) {
+            e.printStackTrace();
+        }
+        if (changedDatabaseContents) {
+                try (final OutputStreamWriter w = new OutputStreamWriter(
+                        getContext().getContentResolver().openOutputStream(
+                                Uri.parse(contactsFile)
+                        ),
+                        StandardCharsets.UTF_8)) {
+                    ContactsJson.save(w, dbContents);
+                } catch (FileNotFoundException e) {
+                    e.printStackTrace();
+                } catch (IOException e) {
+                    e.printStackTrace();
                 }
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Contact sync err", e);
         }
     }
 

@@ -12,12 +12,14 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.database.Cursor;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.preference.PreferenceManager;
 import android.provider.MediaStore;
 import android.support.v4.app.NotificationManagerCompat;
+import android.support.v4.provider.DocumentFile;
 import android.util.Log;
 import android.widget.Toast;
 
@@ -66,44 +68,29 @@ public class FileJobService extends JobService {
                 final String contactsFile = prefs.getString("contacts_file", null);
                 final String agendaFiles = prefs.getString("agenda_files", null);
 
-                final Set<File> toWatch = new HashSet<>();
+                final Set<DocumentFile> toWatch = new HashSet<>();
                 if (contactsFile != null) {
-                    final File file = new File(contactsFile);
-                    if (file.exists()) toWatch.add(file);
+                    toWatch.add(DocumentFile.fromSingleUri(context, Uri.parse(contactsFile)));
                 }
 
                 if (agendaFiles != null) {
-                    CalSyncAdapter.collectOrgFiles(new File(agendaFiles), toWatch);
+                    CalSyncAdapter.collectOrgFiles(
+                            CalSyncAdapter.docFile(context, agendaFiles),
+                            toWatch);
                 }
 
                 final ArrayList<String> paths = new ArrayList<>();
                 StringBuffer sb = new StringBuffer();
-                for (File f : toWatch) {
-                    if (sb.length() > 0) sb.append(", ");
-                    sb.append("?");
-                    try {
-                        paths.add(f.getCanonicalPath());
-                    } catch (IOException e) {}
-                }
 
                 int i = 0;
-                try (Cursor files = cr.query(MediaStore.Files.getContentUri("external"),
-                        new String[]{MediaStore.Files.FileColumns._ID},
-                        "_DATA IN (" + sb.toString() + ")",
-                        paths.toArray(new String[]{}),
-                        null
-                )) {
-                    while (files.moveToNext()) {
-                        i++;
-                        b.addTriggerContentUri(
-                                new JobInfo.TriggerContentUri(
-                                        MediaStore.Files.getContentUri(
-                                                "external",
-                                                files.getLong(0)),
-                                        JobInfo.TriggerContentUri.FLAG_NOTIFY_FOR_DESCENDANTS
-                                )
-                        );
-                    }
+                for (DocumentFile f : toWatch) {
+                    i++;
+                    b.addTriggerContentUri(
+                            new JobInfo.TriggerContentUri(
+                                    f.getUri(),
+                                    JobInfo.TriggerContentUri.FLAG_NOTIFY_FOR_DESCENDANTS
+                            )
+                    );
                 }
 
                 Log.i(TAG, "Watching " + i + " contenturi for " + paths.size() + " files...");

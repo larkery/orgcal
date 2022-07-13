@@ -12,11 +12,18 @@ import android.os.Bundle;
 import android.preference.Preference;
 import android.preference.PreferenceFragment;
 import android.support.annotation.Nullable;
+import android.util.Log;
 import android.widget.Toast;
 
 import com.larkery.simpleorgsync.lib.Application;
 import com.larkery.simpleorgsync.lib.FileUtils;
 
+import java.io.BufferedInputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -103,8 +110,16 @@ public class PrefsActivity extends Activity {
                             "How is your agenda stored?",
                             new String[] {"In a single file", "In a directory of files"},
                             new Intent[] {
-                                    new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*"),
+                                    new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*")
+                                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION |
+                                            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION |
+                                            Intent.FLAG_GRANT_PREFIX_URI_PERMISSION),
                                     new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                                            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION |
+                                            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION |
+                                            Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
                             },
                             new int[] {SELECT_AGENDA_FILE, SELECT_AGENDA_DIRECTORY},
                             OrgPreferenceFragment.this
@@ -118,6 +133,10 @@ public class PrefsActivity extends Activity {
                 public boolean onPreferenceClick(Preference preference) {
                     Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                     intent.setType("*/*");
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION |
+                            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION |
+                            Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
                     startActivityForResult(intent, SELECT_CONTACTS_FILE);
                     return true;
                 }
@@ -155,18 +174,34 @@ public class PrefsActivity extends Activity {
             super.onActivityResult(requestCode, resultCode, data);
             String path = null;
             String pref = null;
+            Log.i("ORGSYNC/PREF", "got uri " + data.getData());
             switch (requestCode) {
                 case SELECT_AGENDA_FILE:
-                    path = FileUtils.getFilePathFromUri(getContext(), data.getData());
+                    getContext().getContentResolver().takePersistableUriPermission(
+                            data.getData(),
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    );
+                    path = data.getData().toString();
                     pref = "agenda_files";
                     break;
                 case SELECT_AGENDA_DIRECTORY:
-                    path = FileUtils.getDirectoryPathFromUri(getContext(), data.getData());
+                    getContext().getContentResolver().takePersistableUriPermission(
+                            data.getData(),
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    );
+                    path = data.getData().toString();
                     pref = "agenda_files";
                     break;
                 case SELECT_CONTACTS_FILE:
+                    getContext().getContentResolver().takePersistableUriPermission(
+                            data.getData(),
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    );
                     pref = "contacts_file";
-                    path = FileUtils.getFilePathFromUri(getContext(), data.getData());
+                    path = data.getData().toString();
                     break;
             }
             if (pref != null && path != null) {

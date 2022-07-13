@@ -20,6 +20,7 @@ import android.preference.PreferenceManager;
 import android.provider.CalendarContract;
 import android.provider.CalendarContract.Calendars;
 import android.support.annotation.RequiresApi;
+import android.support.v4.provider.DocumentFile;
 import android.text.TextUtils;
 import android.util.Log;
 import android.widget.Toast;
@@ -33,6 +34,8 @@ import com.larkery.simpleorgsync.cal.parse.OrgParser;
 import com.larkery.simpleorgsync.cal.parse.Timestamp;
 import com.larkery.simpleorgsync.lib.Application;
 import com.larkery.simpleorgsync.lib.FileUtils;
+
+import org.w3c.dom.Document;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -61,22 +64,19 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
         super(context, autoInitialize);
     }
 
-    public static void collectOrgFiles(final File rootFile, final Set<File> output) {
+    public static DocumentFile docFile(final Context con, final String uri) {
+        final Uri _uri = Uri.parse(uri);
+        if (_uri.getPath().startsWith("/tree")) {
+            return DocumentFile.fromTreeUri(con, _uri);
+        } else {
+            return DocumentFile.fromSingleUri(con, _uri);
+        }
+    }
+
+    public static void collectOrgFiles(DocumentFile rootFile, final Set<DocumentFile> output) {
         if (rootFile.isDirectory()) {
-            final File[] sub = rootFile.listFiles(
-                    new FileFilter() {
-                        @Override
-                        public boolean accept(File pathname) {
-                            return pathname.isDirectory() ||
-                                    (pathname.isFile() && pathname.getName().endsWith(".org"));
-                        }
-                    });
-            for (final File f : sub) {
-                if (f.isDirectory()) {
-                    collectOrgFiles(f, output);
-                } else if (f.isFile()) {
-                    output.add(f);
-                }
+            for (DocumentFile child : rootFile.listFiles()) {
+                collectOrgFiles(child, output);
             }
         } else if (rootFile.isFile() && rootFile.getName().endsWith(".org")) {
             output.add(rootFile);
@@ -105,30 +105,30 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
                         account);
 
         // identify / create calendars for all the names
-        final Set<File> distinctAgendaFiles = new HashSet<>();
+        final Set<DocumentFile> distinctAgendaFiles = new HashSet<>();
 
-        final File agendaRootFile = new File(agendaRoot);
-
+        final DocumentFile agendaRootFile = docFile(getContext(), agendaRoot);
         collectOrgFiles(agendaRootFile, distinctAgendaFiles);
-        final Map<File, StringBuffer> fileContents = new HashMap<>();
-        final ListMultimap<File, Heading> headingsByFile = ArrayListMultimap.create();
+        final Map<DocumentFile, StringBuffer> fileContents = new HashMap<>();
+        final ListMultimap<DocumentFile, Heading> headingsByFile = ArrayListMultimap.create();
         final ListMultimap<String, Heading> headingsByCategory = ArrayListMultimap.create();
 
+
         // load it all
-        for (final File f : distinctAgendaFiles) {
+        for (final DocumentFile df : distinctAgendaFiles) {
             try {
-                Log.i(TAG, "Parsing" + f);
-                final StringBuffer sb = readFile(f);
-                fileContents.put(f, sb);
-                String category = f.getName();
+                Log.i(TAG, "Parsing" + df);
+                final StringBuffer sb = readFile(df.getUri());
+                fileContents.put(df, sb);
+                String category = df.getName();
                 if (category.endsWith(".org")) {
                     category = category.substring(0, category.length() - 4);
                 }
                 final List<Heading> headings = OrgParser.parse(sb, TimeZone.getTimeZone("Europe/London"), category);
-                headingsByFile.putAll(f, headings);
-                Log.i(TAG, f + " contains " + headings.size() + " headings");
+                headingsByFile.putAll(df, headings);
+                Log.i(TAG, df + " contains " + headings.size() + " headings");
             } catch (IOException ex) {
-                Log.e(TAG, "Reading " + f, ex);
+                Log.e(TAG, "Reading " + df, ex);
             }
         }
 
@@ -178,11 +178,11 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
             // I think at this point we need to put the new headings into the files
 
             boolean foundFile = false;
-            for (final File f : distinctAgendaFiles) {
-                if (f.getName().endsWith(".org")) {
-                    final String c = f.getName().substring(0, f.getName().length() - 4);
+            for (final DocumentFile df : distinctAgendaFiles) {
+                if (df.getName().endsWith(".org")) {
+                    final String c = df.getName().substring(0, df.getName().length() - 4);
                     if (c.equals(category)) {
-                        headingsByFile.putAll(f, newHeadings);
+                        headingsByFile.putAll(df, newHeadings);
                         foundFile = true;
                         break;
                     }
@@ -191,9 +191,11 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
 
             if (!foundFile) {
                 // need to put headings in a new file or so
+
                 if (agendaRootFile.isDirectory()) {
-                    final File categoryFile =
-                            new File(agendaRootFile, category + ".org");
+                    final DocumentFile categoryFile =
+                            agendaRootFile.createFile("text/plain",
+                                    category + ".org");
                     headingsByFile.putAll(categoryFile, newHeadings);
                     distinctAgendaFiles.add(categoryFile);
                 }
@@ -201,7 +203,7 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
         }
 
         // now write each file, one at a time
-        for (final File file : distinctAgendaFiles) {
+        for (final DocumentFile file : distinctAgendaFiles) {
             final List<Heading> fileHeadings = headingsByFile.get(file);
             final List<Edit> edits = new ArrayList<>();
             final StringBuffer appends = new StringBuffer();
@@ -234,7 +236,9 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
             }
             try {
                 final OutputStreamWriter w = new OutputStreamWriter(
-                        new FileOutputStream(file),
+                        getContext().getContentResolver().openOutputStream(
+                                file.getUri()
+                        ),
                         StandardCharsets.UTF_8);
                 try {
                     w.write(newContents.toString());
@@ -336,31 +340,21 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
 
     private static final long MAX_FILE = 1024 * 1024 * 1024;
 
-    private static StringBuffer readFile(File file) throws IOException {
-        final long size = file.length();
-        if (size < 1 || size > MAX_FILE) {
-            Log.w(TAG, file + " has unreasonable size " + size);
-            return null;
-        } else {
-            final StringBuffer sb = new StringBuffer((int) size);
+    private StringBuffer readFile(Uri file) throws IOException {
+        try (final BufferedReader isr = new BufferedReader(new InputStreamReader(
+                getContext().getContentResolver().openInputStream(file),
+                StandardCharsets.UTF_8
+        ))) {
+            final StringBuffer sb = new StringBuffer();
 
-            final BufferedReader isr = new BufferedReader(new InputStreamReader(
-                    new FileInputStream(file),
-                    StandardCharsets.UTF_8
-            ));
+            String line;
 
-            try {
-                String line;
-
-                while (null != (line = isr.readLine())) {
-                    sb.append(line);
-                    sb.append("\n");
-                }
-
-                return sb;
-            } finally {
-                isr.close();
+            while (null != (line = isr.readLine())) {
+                sb.append(line);
+                sb.append("\n");
             }
+
+            return sb;
         }
     }
 
