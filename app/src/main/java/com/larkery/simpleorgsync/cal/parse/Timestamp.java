@@ -3,6 +3,7 @@ package com.larkery.simpleorgsync.cal.parse;
 import android.annotation.SuppressLint;
 import android.os.Build;
 import android.support.annotation.RequiresApi;
+import android.util.Log;
 
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
@@ -10,6 +11,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Objects;
 import java.util.TimeZone;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @RequiresApi(api = Build.VERSION_CODES.N)
@@ -186,6 +188,34 @@ public class Timestamp {
         }
     }
 
+    static final Pattern durationPattern =
+            Pattern.compile(
+                    "P(?:(\\d+)W)?" +
+                            "(?:(\\d+)D)?" +
+                            "(?:(\\d+)T)?" +
+                            "(?:(\\d+)M)?"
+            );
+
+    public void setEndTimeFromDuration(String string) {
+        Matcher g = durationPattern.matcher(string);
+        String W = g.group(1);
+        String D = g.group(2);
+        String T = g.group(3);
+        String M = g.group(4);
+
+        int w = W == null ? 0 : Integer.parseInt(W);
+        int d = D == null ? 0 : Integer.parseInt(D);
+        int t = T == null ? 0 : Integer.parseInt(T);
+        int m = M == null ? 0 : Integer.parseInt(M);
+
+        long millis = m * ONE_MINUTE +
+                t * ONE_HOUR +
+                d * ONE_DAY +
+                w * ONE_WEEK;
+
+        setEndTime(startTime + millis);
+    }
+
     public enum Type {
         SCHEDULED, DEADLINE, ACTIVE, INVALID;
 
@@ -356,20 +386,14 @@ public class Timestamp {
         final String startDate = start.substring(0, 10);
         String out = "";
 
+        final String end = LONG_FORMAT.format(new Date(endTime));
+        final String endDate = end.substring(0, 10);
+
         if (recurrence != RecurrenceInterval.NONE) {
-            final String end = LONG_FORMAT.format(new Date(endTime));
-            final String endDate = end.substring(0, 10);
-            if (allDay && (endTime == startTime + ONE_DAY)) {
-                out = startDate;
-            } else if (startDate.equals(endDate)) {
-                if (allDay) {
-                    out = startDate;
-                } else {
-                    out = start + "-" + end.substring(11);
-                }
+            if (startTime == endTime || (allDay && (endTime == startTime + ONE_DAY))) {
+                out = allDay ? startDate : start;
             } else {
-                // can't represent this in org mode - not sure what to do. truncate?
-                out = startDate;
+                out = allDay ? startDate : (start + "-" + end.substring(11));
             }
             out = "<" + out + recurrence.stringFor(frequency) + ">";
             if (repeatEndTime != null) {
@@ -385,9 +409,6 @@ public class Timestamp {
             }
             out = "<" + out + ">";
         } else {
-            final String end = LONG_FORMAT.format(new Date(endTime));
-            final String endDate = end.substring(0, 10);
-
             if (allDay && (endTime == startTime + ONE_DAY)) {
                 out = startDate;
                 out = "<" + out + ">";

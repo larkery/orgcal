@@ -12,12 +12,14 @@ import android.content.SharedPreferences;
 import android.content.SyncResult;
 import android.database.Cursor;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.RemoteException;
 import android.os.StrictMode;
 import android.preference.PreferenceManager;
 import android.provider.CalendarContract;
 import android.provider.CalendarContract.Calendars;
+import android.support.annotation.RequiresApi;
 import android.text.TextUtils;
 import android.util.Log;
 import android.widget.Toast;
@@ -392,6 +394,7 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
         }
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.N)
     private void syncCalendar(
             Uri eventsUri,
             long calendarID,
@@ -518,9 +521,15 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
         heading.setHeading(query.getString(EventsProjection.TITLE.ordinal()));
         // change the timestamp
         ts.setStartTime(query.getLong(EventsProjection.START_TIME.ordinal()));
-        ts.setEndTime(query.getLong(EventsProjection.END_TIME.ordinal()));
         ts.setAllDay(query.getInt(EventsProjection.IS_ALL_DAY.ordinal()) == 1);
-        ts.setRRule(query.getString(EventsProjection.RRULE.ordinal()));
+        final String rrule = query.getString(EventsProjection.RRULE.ordinal());
+        ts.setRRule(rrule);
+        if (rrule.isEmpty()) {
+            ts.setEndTime(query.getLong(EventsProjection.END_TIME.ordinal()));
+        } else {
+            // have to do this after setting start time!
+            ts.setEndTimeFromDuration(query.getString(EventsProjection.DURATION.ordinal()));
+        }
         final String location = query.getString(EventsProjection.LOCATION.ordinal());
         if (location != null && !location.isEmpty()) {
             heading.setProperty("LOCATION", location);
@@ -537,6 +546,7 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
         operations.add(del);
     }
 
+    @RequiresApi(api = Build.VERSION_CODES.N)
     private void createHeading(final Uri calURI,
                                Cursor query,
                                List<ContentProviderOperation> operations,
