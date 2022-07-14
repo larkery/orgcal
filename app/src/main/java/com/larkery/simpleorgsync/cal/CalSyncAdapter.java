@@ -518,7 +518,7 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
         ts.setAllDay(query.getInt(EventsProjection.IS_ALL_DAY.ordinal()) == 1);
         final String rrule = query.getString(EventsProjection.RRULE.ordinal());
         ts.setRRule(rrule);
-        if (rrule.isEmpty()) {
+        if (rrule == null || rrule.isEmpty()) {
             ts.setEndTime(query.getLong(EventsProjection.END_TIME.ordinal()));
         } else {
             // have to do this after setting start time!
