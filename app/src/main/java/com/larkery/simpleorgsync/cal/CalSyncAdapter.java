@@ -1,6 +1,7 @@
 package com.larkery.simpleorgsync.cal;
 
 import android.accounts.Account;
+import android.accounts.AccountManager;
 import android.content.AbstractThreadedSyncAdapter;
 import android.content.ContentProviderClient;
 import android.content.ContentProviderOperation;
@@ -15,33 +16,28 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.RemoteException;
-import android.os.StrictMode;
 import android.preference.PreferenceManager;
 import android.provider.CalendarContract;
 import android.provider.CalendarContract.Calendars;
 import android.support.annotation.RequiresApi;
 import android.support.v4.provider.DocumentFile;
 import android.text.TextUtils;
-import android.util.Log;
-import android.widget.Toast;
 
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Sets;
+import com.google.gson.JsonObject;
 import com.larkery.simpleorgsync.cal.parse.Edit;
 import com.larkery.simpleorgsync.cal.parse.Heading;
 import com.larkery.simpleorgsync.cal.parse.OrgParser;
 import com.larkery.simpleorgsync.cal.parse.Timestamp;
-import com.larkery.simpleorgsync.lib.Application;
-import com.larkery.simpleorgsync.lib.FileUtils;
+import com.larkery.simpleorgsync.lib.JSONPrefs;
+import com.larkery.simpleorgsync.lib.Log;
 
-import org.w3c.dom.Document;
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileFilter;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
@@ -56,12 +52,13 @@ import java.util.Set;
 import java.util.TimeZone;
 
 public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
-    private static final String TAG = Application.TAG + "/CALSYNC";
+    private static final String TAG = "CalSyncAdapter";
     private Timestamp.Type ttype = Timestamp.Type.ACTIVE;
     private TimeZone calTimezone = TimeZone.getDefault();
 
     public CalSyncAdapter(Context context, boolean autoInitialize) {
         super(context, autoInitialize);
+        Log.i(TAG, "Constructed");
     }
 
     public static DocumentFile docFile(final Context con, final String uri) {
@@ -73,12 +70,16 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
         }
     }
 
-    public static void collectOrgFiles(DocumentFile rootFile, final Set<DocumentFile> output) {
+    public static void collectOrgFiles(DocumentFile rootFile,
+                                       final Set<DocumentFile> output,
+                                       boolean ignoreConflicts) {
         if (rootFile.isDirectory()) {
             for (DocumentFile child : rootFile.listFiles()) {
-                collectOrgFiles(child, output);
+                collectOrgFiles(child, output, ignoreConflicts);
             }
-        } else if (rootFile.isFile() && rootFile.getName().endsWith(".org")) {
+        } else if (rootFile.isFile() && rootFile.getName().endsWith(".org")
+                   && (ignoreConflicts || !rootFile.getName().contains(".sync-conflict"))
+        ) {
             output.add(rootFile);
         }
     }
@@ -86,11 +87,11 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
     @Override
     public void onPerformSync(Account account, Bundle extras, String authority,
                               ContentProviderClient provider, SyncResult syncResult) {
+        final JSONPrefs prefs = JSONPrefs.fromContext(getContext(), account);
+        Log.i(TAG, "Prefs: " + prefs);
         int updatedInOrg = 0;
-        final SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getContext());
-        final String agendaRoot = prefs.getString("agenda_files", null);
 
-        Log.i(TAG,"Perform sync " + agendaRoot);
+        final String agendaRoot = prefs.getString("agenda_files", null);
 
         if (agendaRoot == null) return;
 
@@ -108,7 +109,8 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
         final Set<DocumentFile> distinctAgendaFiles = new HashSet<>();
 
         final DocumentFile agendaRootFile = docFile(getContext(), agendaRoot);
-        collectOrgFiles(agendaRootFile, distinctAgendaFiles);
+        collectOrgFiles(agendaRootFile, distinctAgendaFiles,
+                prefs.getBoolean("ignore_syncthing_conflicts", true));
         final Map<DocumentFile, StringBuffer> fileContents = new HashMap<>();
         final ListMultimap<DocumentFile, Heading> headingsByFile = ArrayListMultimap.create();
         final ListMultimap<String, Heading> headingsByCategory = ArrayListMultimap.create();
@@ -117,7 +119,8 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
         // load it all
         for (final DocumentFile df : distinctAgendaFiles) {
             try {
-                Log.i(TAG, "Parsing" + df);
+                final long now = System.currentTimeMillis();
+                Log.i(TAG, "Parsing " + df.getName());
                 final StringBuffer sb = readFile(df.getUri());
                 fileContents.put(df, sb);
                 String category = df.getName();
@@ -126,9 +129,11 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
                 }
                 final List<Heading> headings = OrgParser.parse(sb, TimeZone.getTimeZone("Europe/London"), category);
                 headingsByFile.putAll(df, headings);
-                Log.i(TAG, df + " contains " + headings.size() + " headings");
+                final long delta = System.currentTimeMillis() - now;
+                Log.i(TAG, df.getName() + " contains " + headings.size() + " headings" +
+                        ", parsed in " + delta +"ms");
             } catch (IOException ex) {
-                Log.e(TAG, "Reading " + df, ex);
+                Log.e(TAG, "Reading " + df.getName(), ex);
             }
         }
 
@@ -146,9 +151,12 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
             }
         }
 
+        boolean readOnly = prefs.getBoolean("read_only", false);
+        Log.i(TAG, readOnly ? "Read-only mode" : "Read-write mode");
         final Map<String, Long> calendarIDs;
+
         try {
-            calendarIDs = createCalendars(account, calendarsURI, categories, provider);
+            calendarIDs = createCalendars(account, calendarsURI, categories, provider, readOnly);
         } catch (RemoteException e) {
             Log.e(TAG, "Unable to create calendars", e);
             return;
@@ -173,7 +181,7 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
 
             syncCalendar(eventsURI, calendarID,
                     headingsByCategory.get(category), provider,
-                    operations, newHeadings);
+                    operations, newHeadings, readOnly);
 
             // I think at this point we need to put the new headings into the files
 
@@ -203,51 +211,55 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
         }
 
         // now write each file, one at a time
-        for (final DocumentFile file : distinctAgendaFiles) {
-            final List<Heading> fileHeadings = headingsByFile.get(file);
-            final List<Edit> edits = new ArrayList<>();
-            final StringBuffer appends = new StringBuffer();
-            for (final Heading h : fileHeadings) {
-                try {
-                    if (h.exists()) {
-                        int nedits = edits.size();
-                        h.edit(edits);
-                        nedits = edits.size() - nedits;
-                        if (nedits > 0) Log.i(TAG, h.getHeading() + ": " + nedits + " edits");
-                        if (nedits > 0) updatedInOrg++;
-                    } else if (!h.exists()) {
-                        Log.i(TAG, "Appending " + h);
-                        h.append(appends);
-                        updatedInOrg++;
+        if (!readOnly) {
+            for (final DocumentFile file : distinctAgendaFiles) {
+                final List<Heading> fileHeadings = headingsByFile.get(file);
+                final List<Edit> edits = new ArrayList<>();
+                final StringBuffer appends = new StringBuffer();
+                for (final Heading h : fileHeadings) {
+                    try {
+                        if (h.exists()) {
+                            int nedits = edits.size();
+                            h.edit(edits);
+                            nedits = edits.size() - nedits;
+                            if (nedits > 0) Log.i(TAG, h.getHeading() + ": " + nedits + " edits");
+                            if (nedits > 0) updatedInOrg++;
+                        } else if (!h.exists()) {
+                            Log.i(TAG, "Appending " + h);
+                            h.append(appends);
+                            updatedInOrg++;
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error with heading" + h, e);
                     }
-                } catch (Exception e) {
-                    Log.e(TAG, "Error with heading" + h, e);
                 }
-            }
-            Log.i(TAG, edits.size() + " edits to " + file + ", and " + appends.length() + " to append");
-            if (appends.length() == 0 && edits.isEmpty()) continue;
+                Log.i(TAG, edits.size() + " edits to " + file.getName() + ", and " + appends.length() + " to append");
+                if (appends.length() == 0 && edits.isEmpty()) continue;
 
-            // now perform the edits and modify/replace the file
+                // now perform the edits and modify/replace the file
 
-            final StringBuffer newContents = Edit.apply(edits, fileContents.get(file));
-            if (appends.length() > 0) {
-                newContents.append("\n");
-                newContents.append(appends);
-            }
-            try {
-                final OutputStreamWriter w = new OutputStreamWriter(
-                        getContext().getContentResolver().openOutputStream(
-                                file.getUri()
-                        ),
-                        StandardCharsets.UTF_8);
+                final StringBuffer newContents = Edit.apply(edits, fileContents.get(file));
+                if (appends.length() > 0) {
+                    newContents.append("\n");
+                    newContents.append(appends);
+                }
                 try {
-                    w.write(newContents.toString());
-                } finally {
-                    w.close();
+                    final OutputStreamWriter w = new OutputStreamWriter(
+                            getContext().getContentResolver().openOutputStream(
+                                    file.getUri()
+                            ),
+                            StandardCharsets.UTF_8);
+                    try {
+                        w.write(newContents.toString());
+                    } finally {
+                        w.close();
+                    }
+                } catch (IOException e) {
+                    Log.e(TAG, "Error updating " + file.getName(), e);
                 }
-            } catch (IOException e) {
-                Log.e(TAG, "Error updating " + file, e);
             }
+        } else {
+            Log.i(TAG, "Skip any writes, because we are in read-only mode");
         }
 
         try {
@@ -261,10 +273,17 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
         }
     }
 
+    private SharedPreferences getMPSharedPreferences(Context context) {
+        return context.getSharedPreferences(
+                context.getPackageName() + "_preferences",
+                Context.MODE_PRIVATE | Context.MODE_MULTI_PROCESS);
+    }
+
     private Map<String,Long> createCalendars(Account account,
                                              Uri calendarsURI,
                                              Set<String> categories,
-                                             ContentProviderClient provider) throws RemoteException {
+                                             ContentProviderClient provider,
+                                             boolean readOnly) throws RemoteException {
         final Map<String, Long> result = new HashMap<>();
 
         try (final Cursor knownCalendars = provider.query(
@@ -295,6 +314,16 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
                             TextUtils.join(", ", extraCalendars)
                             + ")", null
             );
+            {
+                final ContentValues readOnlyValues = new ContentValues();
+                readOnlyValues.put(Calendars.CALENDAR_ACCESS_LEVEL, readOnly
+                        ? Calendars.CAL_ACCESS_READ : Calendars.CAL_ACCESS_OWNER);
+                provider.update(calendarsURI,
+                        readOnlyValues,
+                        Calendars.ACCOUNT_NAME + "= ? AND "+ Calendars.ACCOUNT_TYPE + "= ?",
+                        new String[] {account.type, account.name}
+                );
+            }
 
             for (final String s : missingCategories) {
                 final ContentValues values = new ContentValues();
@@ -307,9 +336,9 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
                 values.put(Calendars.CALENDAR_COLOR, s.hashCode());
                 values.put(Calendars.CALENDAR_DISPLAY_NAME, properCase(s));
                 values.put(Calendars.OWNER_ACCOUNT, account.name);
-                values.put(Calendars.CALENDAR_ACCESS_LEVEL, Calendars.CAL_ACCESS_OWNER);
+                values.put(Calendars.CALENDAR_ACCESS_LEVEL, readOnly
+                        ? Calendars.CAL_ACCESS_READ : Calendars.CAL_ACCESS_OWNER);
                 values.put(Calendars.CALENDAR_TIME_ZONE, TimeZone.getDefault().getID());
-                values.put(Calendars.SYNC_EVENTS, 1);
 
                 result.put(s,
                         ContentUris.parseId(provider.insert(calendarsURI, values)));
@@ -395,11 +424,12 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
             List<Heading> headings,
             ContentProviderClient provider,
             final List<ContentProviderOperation> operations,
-            List<Heading> newHeadings) {
+            List<Heading> newHeadings,
+            boolean readOnly) {
         final Map<String, Heading> orgIDs = new HashMap<>();
 
         for (final Heading h : headings) {
-            orgIDs.put(h.ensureID(), h);
+            orgIDs.put(h.syncID(readOnly), h);
         }
 
         try (final Cursor query = provider.query(eventsUri, EventsProjection.PROJECTION,
@@ -412,7 +442,7 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
 
                 if (orgID == null || orgID.isEmpty()) {
                     Log.i(TAG, "New heading for " + query.getString(EventsProjection.TITLE.ordinal()));
-                    createHeading(eventsUri, query, operations, newHeadings);
+                    createHeading(eventsUri, query, operations, newHeadings, readOnly);
                 } else {
                     calIDs.add(orgID);
                     final Heading heading = orgIDs.get(orgID);
@@ -456,7 +486,7 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
             for (final String id : Sets.difference(orgIDs.keySet(), calIDs)) {
                 final Heading heading = orgIDs.get(id);
                 Log.i(TAG, "Create: " + heading.getHeading());
-                createInsertOperation(eventsUri,calendarID,heading, operations);
+                createInsertOperation(eventsUri,calendarID,heading, operations, readOnly);
             }
         } catch (RemoteException e) {
             Log.e(TAG, "Error querying events from calendar ", e);
@@ -544,7 +574,8 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
     private void createHeading(final Uri calURI,
                                Cursor query,
                                List<ContentProviderOperation> operations,
-                               List<Heading> newHeadings) {
+                               List<Heading> newHeadings,
+                               boolean readOnly) {
 
         final Heading h = new Heading(
                 query.getString(EventsProjection.TITLE.ordinal()),
@@ -583,7 +614,7 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
                                 EventsProjection.ID.field + "= ?",
                                 new String[]{String.valueOf(localID)}
                         )
-                        .withValue(EventsProjection.SYNC_ID.field, h.ensureID())
+                        .withValue(EventsProjection.SYNC_ID.field, h.syncID(readOnly))
                         .withValue(EventsProjection.ORG_HASH.field, h.checksum())
                         .withValue(EventsProjection.DIRTY.field, 0)
                         .build();
@@ -591,11 +622,15 @@ public class CalSyncAdapter extends AbstractThreadedSyncAdapter {
         operations.add(update);
     }
 
-    private void createInsertOperation(Uri calURI, long calendarId, Heading heading, List<ContentProviderOperation> out) {
+    private void createInsertOperation(Uri calURI,
+                                       long calendarId,
+                                       Heading heading,
+                                       List<ContentProviderOperation> out,
+                                       boolean readOnly) {
         final ContentProviderOperation.Builder create =
                 ContentProviderOperation.newInsert(calURI)
                         .withValue(CalendarContract.Events.CALENDAR_ID, calendarId)
-                        .withValue(CalendarContract.Events._SYNC_ID, heading.ensureID());
+                        .withValue(CalendarContract.Events._SYNC_ID, heading.syncID(readOnly));
 
         out.add(copy(create, heading).build());
 

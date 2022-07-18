@@ -1,6 +1,7 @@
 package com.larkery.simpleorgsync.con;
 
 import android.accounts.Account;
+import android.accounts.AccountManager;
 import android.content.AbstractThreadedSyncAdapter;
 import android.content.ContentProviderClient;
 import android.content.ContentProviderOperation;
@@ -23,23 +24,22 @@ import android.provider.ContactsContract.CommonDataKinds.Phone;
 import android.provider.ContactsContract.CommonDataKinds.StructuredName;
 import android.provider.ContactsContract.CommonDataKinds.StructuredPostal;
 import android.provider.ContactsContract.RawContacts;
-import android.util.Log;
 
 import com.google.common.base.Objects;
 import com.google.common.collect.Sets;
-import com.larkery.simpleorgsync.lib.Application;
+import com.larkery.simpleorgsync.lib.JSONPrefs;
+import com.larkery.simpleorgsync.lib.Log;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileNotFoundException;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -48,7 +48,7 @@ import java.util.Set;
 import java.util.UUID;
 
 public class ConSyncAdapter extends AbstractThreadedSyncAdapter {
-    static final String TAG = Application.TAG +"/CON";
+    static final String TAG = "ConSyncAdapter";
     private Uri rawContactsURI;
     private Uri dataURI;
     private Account account;
@@ -89,9 +89,12 @@ public class ConSyncAdapter extends AbstractThreadedSyncAdapter {
 
     @Override
     public void onPerformSync(Account account, Bundle extras, String authority, ContentProviderClient provider, SyncResult syncResult) {
-        SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(getContext());
+        JSONPrefs prefs = JSONPrefs.fromContext(getContext(), account);
+
+        Log.i(TAG, "Prefs: " + prefs);
         final String contactsFile = prefs.getString("contacts_file", null);
         Log.i(TAG, "Sync Contacts File " + contactsFile);
+        if (contactsFile == null) return;
 
         this.rawContactsURI = syncAdapterURI(RawContacts.CONTENT_URI, account);
         this.dataURI = syncAdapterURI(ContactsContract.Data.CONTENT_URI, account);

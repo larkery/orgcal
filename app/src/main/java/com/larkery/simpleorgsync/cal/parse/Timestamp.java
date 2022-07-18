@@ -3,7 +3,6 @@ package com.larkery.simpleorgsync.cal.parse;
 import android.annotation.SuppressLint;
 import android.os.Build;
 import android.support.annotation.RequiresApi;
-import android.util.Log;
 
 import java.text.ParseException;
 import java.text.SimpleDateFormat;

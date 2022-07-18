@@ -2,26 +2,31 @@ package com.larkery.simpleorgsync.lib;
 
 import android.accounts.Account;
 import android.accounts.AccountManager;
+import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.os.Build;
 import android.os.Bundle;
 import android.preference.PreferenceManager;
 import android.provider.CalendarContract;
 import android.provider.ContactsContract;
-import android.util.Log;
+import android.support.v4.app.ShareCompat;
 
 import com.larkery.simpleorgsync.R;
+import com.larkery.simpleorgsync.cal.CalSyncService;
+import com.larkery.simpleorgsync.con.ConSyncService;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.util.Calendar;
+import java.util.Map;
 
 public class Application extends android.app.Application implements SharedPreferences.OnSharedPreferenceChangeListener {
-    public static final String TAG = "ORGSYNC";
+    private final static String TAG = "Application";
     private AccountManager accountManager;
     private Account account;
     @Override
@@ -34,10 +39,13 @@ public class Application extends android.app.Application implements SharedPrefer
         preferences.registerOnSharedPreferenceChangeListener(this);
 
         FileJobService.register(getApplicationContext());
+
+        transmitPreferences(PreferenceManager.getDefaultSharedPreferences(getApplicationContext()));
     }
 
     public Account getAccount() {
         accountManager.addAccountExplicitly(account, null, null);
+
         return account;
     }
 
@@ -60,13 +68,16 @@ public class Application extends android.app.Application implements SharedPrefer
         }
     }
 
-    public void requestSync() {
+    public void requestSync(final String cause) {
         informSystemSyncable();
+
+        transmitPreferences(PreferenceManager.getDefaultSharedPreferences(getApplicationContext()));
+
         boolean contacts = isContactsSyncable();
         boolean calendar = isCalendarSyncable();
 
         if (contacts) {
-            Log.i(TAG, "Request contacts sync");
+            Log.i(TAG, "Request contacts sync due to " + cause);
             Bundle settingsBundle = new Bundle();
             settingsBundle.putBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, true);
             settingsBundle.putBoolean(ContentResolver.SYNC_EXTRAS_EXPEDITED, true);
@@ -74,7 +85,7 @@ public class Application extends android.app.Application implements SharedPrefer
         }
 
         if (calendar) {
-            Log.i(TAG, "Request calendar sync");
+            Log.i(TAG, "Request calendar sync due to " + cause);
             Bundle settingsBundle = new Bundle();
             settingsBundle.putBoolean(ContentResolver.SYNC_EXTRAS_MANUAL, true);
             settingsBundle.putBoolean(ContentResolver.SYNC_EXTRAS_EXPEDITED, true);
@@ -129,25 +140,38 @@ public class Application extends android.app.Application implements SharedPrefer
                         .getString("agenda_files", null) != null;
     }
 
+    void transmitPreferences(SharedPreferences sharedPreferences) {
+        final JSONObject obj = new JSONObject();
+        for (final Map.Entry<String, ?> e : sharedPreferences.getAll().entrySet()) {
+            try {
+                obj.put(e.getKey(), (Object)e.getValue());
+            } catch (JSONException jsonException) {
+                jsonException.printStackTrace();
+            }
+        }
+        getApplicationContext().getSystemService(AccountManager.class)
+                .setUserData(getAccount(), "prefs", obj.toString());
+    }
+
     @Override
     public void onSharedPreferenceChanged(SharedPreferences sharedPreferences, String s) {
         final String cf = sharedPreferences.getString("contacts_file", null);
         final String af = sharedPreferences.getString("agenda_files", null);
         Log.i(TAG, "Pref change " + cf + " " + af);
+        transmitPreferences(sharedPreferences);
         switch (s) {
             case "contacts_file":
             case "agenda_files":
             case "date_type":
             case "ignore_syncthing_conflicts":
-            {
-               requestSync();
+            case "read_only": {
+                requestSync("a preference was changed: " + s);
             }
-                break;
+            break;
             case "inotify":
                 FileJobService.register(getApplicationContext());
                 break;
-            case "sync_frequency":
-            {
+            case "sync_frequency": {
                 int syncFrequency = Integer.parseInt(sharedPreferences.getString("sync_frequency", "-1"));
                 if (af != null || cf != null) {
                     if (af != null) {
@@ -181,7 +205,7 @@ public class Application extends android.app.Application implements SharedPrefer
                     }
                 }
             }
-                break;
+            break;
         }
     }
 }

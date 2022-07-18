@@ -1,7 +1,5 @@
 package com.larkery.simpleorgsync.lib;
 
-import android.app.Notification;
-import android.app.Service;
 import android.app.job.JobInfo;
 import android.app.job.JobParameters;
 import android.app.job.JobScheduler;
@@ -9,36 +7,23 @@ import android.app.job.JobService;
 import android.content.ComponentName;
 import android.content.ContentResolver;
 import android.content.Context;
-import android.content.Intent;
 import android.content.SharedPreferences;
-import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
-import android.os.Handler;
-import android.os.IBinder;
 import android.preference.PreferenceManager;
-import android.provider.MediaStore;
-import android.support.v4.app.NotificationManagerCompat;
 import android.support.v4.provider.DocumentFile;
 import android.util.Log;
-import android.widget.Toast;
 
-import com.larkery.simpleorgsync.R;
 import com.larkery.simpleorgsync.cal.CalSyncAdapter;
 
-import java.io.File;
-import java.io.IOException;
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Set;
 
 public class FileJobService extends JobService {
-    private static final String TAG = "ORGSYNC/FILEJOBSERVICE";
+    private static final String TAG = "FileJobService";
 
     public FileJobService() {
     }
@@ -67,6 +52,7 @@ public class FileJobService extends JobService {
                 final SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
                 final String contactsFile = prefs.getString("contacts_file", null);
                 final String agendaFiles = prefs.getString("agenda_files", null);
+                final boolean ignoreConflict = prefs.getBoolean("ignore_syncthing_conflicts", true);
 
                 final Set<DocumentFile> toWatch = new HashSet<>();
                 if (contactsFile != null) {
@@ -76,15 +62,15 @@ public class FileJobService extends JobService {
                 if (agendaFiles != null) {
                     CalSyncAdapter.collectOrgFiles(
                             CalSyncAdapter.docFile(context, agendaFiles),
-                            toWatch);
+                            toWatch,
+                            ignoreConflict);
                 }
 
                 final ArrayList<String> paths = new ArrayList<>();
                 StringBuffer sb = new StringBuffer();
-
-                int i = 0;
                 for (DocumentFile f : toWatch) {
-                    i++;
+                    Log.i(TAG, "Watching " + f.getName());
+
                     b.addTriggerContentUri(
                             new JobInfo.TriggerContentUri(
                                     f.getUri(),
@@ -93,7 +79,6 @@ public class FileJobService extends JobService {
                     );
                 }
 
-                Log.i(TAG, "Watching " + i + " contenturi for " + paths.size() + " files...");
                 b.setTriggerContentUpdateDelay(100);
                 b.setTriggerContentMaxDelay(3000);
                 scheduler.schedule(b.build());
@@ -103,8 +88,9 @@ public class FileJobService extends JobService {
 
     @Override
     public boolean onStartJob(JobParameters jobParameters) {
-        Log.i(TAG, "Agenda sync triggered!");
-        ((Application)getApplication()).requestSync();
+        ((Application)getApplication()).requestSync("a file was changed: " +
+                Arrays.toString(jobParameters.getTriggeredContentUris())
+                );
         this.jobFinished(jobParameters, false);
         register(getApplicationContext());
         return false;

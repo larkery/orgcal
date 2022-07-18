@@ -213,7 +213,7 @@ public class Heading {
         this.endOfLastProperty = Math.max(property.getEndPosition(), endOfLastProperty);
     }
 
-    public String ensureID() {
+    private String ensureID() {
         if (!hasProperty("ID")) {
             setProperty("ID", UUID.randomUUID().toString());
         }
@@ -247,5 +247,10 @@ public class Heading {
 
     public Set<String> getTags() {
         return tags;
+    }
+
+    public String syncID(boolean readOnly) {
+        if (readOnly) return checksum();
+        else return ensureID();
     }
 }

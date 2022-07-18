@@ -6,25 +6,20 @@ import android.app.AlertDialog;
 import android.app.Dialog;
 import android.app.DialogFragment;
 import android.app.Fragment;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.preference.Preference;
 import android.preference.PreferenceFragment;
+import android.preference.PreferenceManager;
 import android.support.annotation.Nullable;
-import android.util.Log;
 import android.widget.Toast;
 
 import com.larkery.simpleorgsync.lib.Application;
-import com.larkery.simpleorgsync.lib.FileUtils;
 
-import java.io.BufferedInputStream;
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileNotFoundException;
-import java.io.IOException;
-import java.io.InputStream;
-import java.text.DateFormat;
+import java.lang.reflect.Field;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 
@@ -37,8 +32,6 @@ public class PrefsActivity extends Activity {
         getFragmentManager()
                 .beginTransaction()
                 .replace(android.R.id.content, frag).commit();
-
-
     }
 
     @Override
@@ -149,7 +142,7 @@ public class PrefsActivity extends Activity {
                         public boolean onPreferenceClick(Preference preference) {
                             final Application a = (Application)
                                     OrgPreferenceFragment.this.getActivity().getApplication();
-                            a.requestSync();
+                            a.requestSync("user pressed button in prefs");
                             return true;
                         }
                     }
@@ -174,7 +167,6 @@ public class PrefsActivity extends Activity {
             super.onActivityResult(requestCode, resultCode, data);
             String path = null;
             String pref = null;
-            Log.i("ORGSYNC/PREF", "got uri " + data.getData());
             switch (requestCode) {
                 case SELECT_AGENDA_FILE:
                     getContext().getContentResolver().takePersistableUriPermission(

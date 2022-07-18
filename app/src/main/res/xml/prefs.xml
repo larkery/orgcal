@@ -22,6 +22,11 @@
             a:title="Watch for file changes"
             a:summary="If the agenda files change, trigger calendar sync"
             />
+        <CheckBoxPreference
+            a:defaultValue="false"
+            a:key="read_only"
+            a:summary="If checked android calendar will be read-only"
+            a:title="Don't modify agenda files" />
         <ListPreference
             a:defaultValue="0"
             a:dialogTitle="How often to sync"
