@@ -4,6 +4,8 @@ import android.annotation.SuppressLint;
 import android.os.Build;
 import android.support.annotation.RequiresApi;
 
+import com.larkery.simpleorgsync.lib.Log;
+
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -195,30 +197,42 @@ public class Timestamp {
                     "P(?:(\\d+)W)?" +
                             "(?:(\\d+)D)?" +
                             "(?:(\\d+)T)?" +
-                            "(?:(\\d+)M)?"
+                            "(?:(\\d+)M)?" +
+                            "(?:(\\d+)S)?"
             );
 
     public void setEndTimeFromDuration(String string) {
         long millis = 0;
 
-        if (string != null) {
-            Matcher g = durationPattern.matcher(string);
-            String W = g.group(1);
-            String D = g.group(2);
-            String T = g.group(3);
-            String M = g.group(4);
+        try {
+            if (string != null) {
+                Matcher g = durationPattern.matcher(string);
+                if (!g.matches()) {
+                    Log.w("Timestamp", "Invalid duration "+ string);
+                    return;
+                }
+                String W = g.group(1);
+                String D = g.group(2);
+                String T = g.group(3);
+                String M = g.group(4);
+                String S = g.group(5);
 
-            int w = W == null ? 0 : Integer.parseInt(W);
-            int d = D == null ? 0 : Integer.parseInt(D);
-            int t = T == null ? 0 : Integer.parseInt(T);
-            int m = M == null ? 0 : Integer.parseInt(M);
+                int w = W == null ? 0 : Integer.parseInt(W);
+                int d = D == null ? 0 : Integer.parseInt(D);
+                int t = T == null ? 0 : Integer.parseInt(T);
+                int m = M == null ? 0 : Integer.parseInt(M);
+                int s = S == null ? 0 : Integer.parseInt(S);
 
-            millis = m * ONE_MINUTE +
-                t * ONE_HOUR +
-                d * ONE_DAY +
-                w * ONE_WEEK;
+                millis = s * ONE_SEC +
+                        m * ONE_MINUTE +
+                        t * ONE_HOUR +
+                        d * ONE_DAY +
+                        w * ONE_WEEK;
+            }
+            setEndTime(startTime + millis);
+        } catch (Exception e) {
+            Log.w("Timestamp", "Invalid duration string: " + string, e);
         }
-        setEndTime(startTime + millis);
     }
 
     public enum Type {
