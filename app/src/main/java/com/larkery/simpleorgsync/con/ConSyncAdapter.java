@@ -35,8 +35,10 @@ import org.json.JSONObject;
 
 import java.io.BufferedReader;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -205,10 +207,12 @@ public class ConSyncAdapter extends AbstractThreadedSyncAdapter {
             e.printStackTrace();
         }
         if (changedDatabaseContents) {
-                try (final OutputStreamWriter w = new OutputStreamWriter(
-                        getContext().getContentResolver().openOutputStream(
-                                Uri.parse(contactsFile)
-                        ),
+                try (
+                        final OutputStreamWriter w = new OutputStreamWriter(
+                                getContext().getContentResolver().openOutputStream(
+                                        Uri.parse(contactsFile),"wt"
+                                )
+                        ,
                         StandardCharsets.UTF_8)) {
                     ContactsJson.save(w, dbContents);
                 } catch (FileNotFoundException e) {
